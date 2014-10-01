@@ -11,7 +11,7 @@ import qualified Graphics.UI.SDL.Image as SDLI
 import qualified Data.Map as Map 
 {-# LANGUAGE BangPatterns #-}
 
-
+//test
 
 osc :: Int -> Int -> Int -> [Int]
 osc a b c = cycle $ [a,a+c..b] ++ [b,b-c..a+c]
