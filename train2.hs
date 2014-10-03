@@ -8,10 +8,11 @@ import Data.Maybe (fromJust)
 import qualified Graphics.UI.SDL as SDL
 import qualified Graphics.UI.SDL.Primitives as SDLP
 import qualified Graphics.UI.SDL.Image as SDLI
-import qualified Data.Map as Map 
+import qualified Data.Map as Map
+import qualified Data.Vector as Vec
+
 {-# LANGUAGE BangPatterns #-}
 
-//test
 
 osc :: Int -> Int -> Int -> [Int]
 osc a b c = cycle $ [a,a+c..b] ++ [b,b-c..a+c]
@@ -351,3 +352,119 @@ main = SDL.withInit [SDL.InitEverything] $ do
 
                   SDL.NoEvent -> return (False,w)
                   _           -> whileEvents w
+
+
+--------------------------------------------------------------------------------------------------------
+{- PathFinding -}
+
+type Mat a = Vec.Vector (Vec.Vector a)
+
+(§) :: Mat a -> (Int, Int) -> a
+v § (r, c) = (v Vec.! r) Vec.! c
+
+v = Vec.fromList [Vec.fromList [1..3]| x <- [1..3]]
+
+printVec :: (Show a) => Mat a -> String
+printVec v | (Vec.length $ Vec.tail v) == 0 = drop 9 $ (show $ Vec.head v)
+           | otherwise = drop 9 $ (show $ Vec.head v) ++ '\n':printVec (Vec.tail v)
+
+
+{-
+
+#######
+# S####
+# # G##
+#    ##
+#######
+
+-}
+
+map1 = [(1,1),(1,2),(2,1),(2,3),(2,4),(3,1),(3,2),(3,3),(3,4)] :: [(Int,Int)]
+
+findNearby :: (Int,Int,Int) -> [(Int,Int,Int)]
+findNearby (x,y,n) = [(x+1,y,n+1),(x,y+1,n+1),(x-1,y,n+1),(x,y-1,n+1)]
+
+
+
+deleteAllBy :: (a -> Bool) -> [a] -> [a]
+deleteAllBy p [] = []
+deleteAllBy p (x:xs) | (p x) = deleteAllBy  p xs
+                     | otherwise = x:deleteAllBy p xs
+{-
+  1 2 3 4 5 6 7 8
+X X X X X X X X X X
+X _ _ _ X X _ X _ X 1
+X _ X _ _ X _ _ _ X 2
+X S X X _ _ _ X _ X 3
+X 6 X 6 _ X _ _ _ X 4
+X 5 6 5 X X 6 X _ X 5
+X 4 X 4 3 X 5 X _ X 6
+X 3 X X 2 3 4 X _ X 7
+X 2 1 0 1 X 5 6 _ X 8
+X X X X X X X X X X
+
+  1 2 3 4 5 6 7 8
+X X X X X X X X X X
+X _ _ _ X X _ X _ X 1
+X _ X _ _ X _ _ _ X 2
+X S X X _ _ _ X _ X 3
+X _ X _ _ X _ _ _ X 4
+X _ _ _ X X _ X _ X 5
+X _ X _ _ X _ X _ X 6
+X _ X X _ _ _ X _ X 7
+X _ _ O _ X _ _ _ X 8
+X X X X X X X X X X
+
+
+
+-}
+
+map2 = [(1,1),(1,2),(1,3),(1,6),(1,8),
+        (2,1),(2,3),(2,4),(2,6),(2,7),(2,8),
+        (3,1),(3,4),(3,5),(3,6),(3,8),
+        (4,1),(4,3),(4,4),(4,6),(4,7),(4,8),
+        (5,1),(5,2),(5,3),(5,6),(5,8),
+        (6,1),(6,3),(6,4),(6,6),(6,8),
+        (7,1),(7,4),(7,5),(7,6),(7,8),
+        (8,1),(8,2),(8,3),(8,4),(8,6),(8,7),(8,8)] :: [(Int,Int)]
+
+
+
+
+pathFinder :: [(Int,Int)] -> (Int,Int) -> (Int,Int) -> [(Int,Int)]
+pathFinder m s@(x1,y1) g@(x2,y2) = let grid = reverse $ mapGrid [(x2,y2,0)] [(x2,y2,0)]
+                                   in reverse $ [(x,y) | (x,y,_) <- makePath (tail grid) [(head grid)]]
+    
+
+    where mapGrid [] xs = xs
+          mapGrid l@(x@(x',y',n):xs) r = let nearby = findNearby x
+                                       in if any (\(a,b,n) -> (a,b) == s) nearby then r++[(x1,y1,n+1)]
+
+                                       else let selected  = deleteAllBy (p r) nearby                          
+                                            in mapGrid (xs++selected) (r++selected)
+          
+         
+          makePath [] r = r
+          makePath (x:[]) r = r
+          makePath xs (r@(_,_,n):rs) = let nextPos = minPos r xs
+                                           ns = dropWhile (\e -> e /= nextPos) xs
+                                           in case ns of [] -> (nextPos:r:rs)
+                                                         _  -> makePath (tail ns) (nextPos:r:rs)
+
+
+          sel _ [] = False
+          sel (a,b,n) ((c,d,m):xs) | (a,b) == (c,d) && m <= n = True
+                                   | otherwise = sel (a,b,n) xs 
+          
+          p res = (\(a,b,n) -> (not $ elem (a,b) m) || sel (a,b,n) res)
+
+          minPos x@(_,_,n) xs = let nearby = filter (\e -> any (customEq e) (findNearby x)) (xs)
+                                in case nearby of [] -> x
+                                                  _  -> foldl' minBy (head nearby) nearby
+
+          customEq (a,b,c) (e,f,d) | a == e && b == f = True
+                                   | otherwise = False
+
+          minBy (a,b,c) (e,f,g) | c <= g = (a,b,c)
+                                | otherwise = (e,f,g)
+
