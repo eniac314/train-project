@@ -431,21 +431,22 @@ map2 = [(1,1),(1,2),(1,3),(1,6),(1,8),
 
 
 
+
+
 pathFinder :: [(Int,Int)] -> (Int,Int) -> (Int,Int) -> [(Int,Int)]
-pathFinder m s@(x1,y1) g@(x2,y2) = let grid = reverse $ mapGrid [(x2,y2,0)] [(x2,y2,0)]
-                                   in reverse $ [(x,y) | (x,y,_) <- makePath (tail grid) [(head grid)]]
+pathFinder m s@(x1,y1) g@(x2,y2) = let grid = mapGrid [(x1,y1,0)] [(x1,y1,0)]
+                                   in [(x,y) | (x,y,_) <- makePath (tail grid) [(head grid)]]
     
 
     where mapGrid [] xs = xs
           mapGrid l@(x@(x',y',n):xs) r = let nearby = findNearby x
-                                       in if any (\(a,b,n) -> (a,b) == s) nearby then r++[(x1,y1,n+1)]
+                                       in if any (\(a,b,n) -> (a,b) == g) nearby then (x2,y2,n+1):r
 
                                        else let selected  = deleteAllBy (p r) nearby                          
-                                            in mapGrid (xs++selected) (r++selected)
+                                            in mapGrid (xs++selected) (selected++r)
           
          
           makePath [] r = r
-          makePath (x:[]) r = r
           makePath xs (r@(_,_,n):rs) = let nextPos = minPos r xs
                                            ns = dropWhile (\e -> e /= nextPos) xs
                                            in case ns of [] -> (nextPos:r:rs)
@@ -467,4 +468,3 @@ pathFinder m s@(x1,y1) g@(x2,y2) = let grid = reverse $ mapGrid [(x2,y2,0)] [(x2
 
           minBy (a,b,c) (e,f,g) | c <= g = (a,b,c)
                                 | otherwise = (e,f,g)
-
