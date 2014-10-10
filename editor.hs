@@ -76,7 +76,7 @@ data World = World {
              }
 
 data Change = Change {
-           evList   :: [SDL.Event],
+           misc     :: [String],
            mouseX   :: Int,
            mouseY   :: Int,
            lClicked :: Bool,
@@ -97,15 +97,15 @@ makeSound = Sound [] []
 
 buildWorld :: [Entity] -> Entity -> [Entity] -> [Entity] -> [Entity] -> [Entity] -> Change -> SDL.Surface -> Entity -> World
 buildWorld l av f b m1 m2 c s ca = World { avatar  = av,
-	                                    land    = l,
-	                                    fg      = f,
-	                                    bg      = b,
-	                                    miscFg  = m1,
-	                                    miscBg  = m2,
-	                                    changes = c,
-	                                    screen  = s,
-                                      canvas  = ca
-                                      } 
+	                                       land    = l,
+	                                        fg      = f,
+	                                        bg      = b,
+	                                        miscFg  = m1,
+	                                        miscBg  = m2,
+	                                        changes = c,
+	                                        screen  = s,
+                                            canvas  = ca
+                                          } 
 
 
 updateWorld :: World -> World
@@ -285,7 +285,7 @@ updateMap w = let p = pixToMap w
 ---------------------------------------------------------------------------------------------------
 {- Misc -}
 
-
+ 
 osc :: Int -> Int -> Int -> [Int]
 osc a b c = cycle $ [a,a+c..b] ++ [b,b-c..a+c]
 
@@ -330,6 +330,18 @@ printMapData w = let (gW,gH) = gridWH.changes $ w
 ---------------------------------------------------------------------------------------------------
 {- File processing -}
 
+saveData :: World -> IO ()
+saveData w = let path = head.misc.changes $ w
+                 toWrite = (show.mapData.changes $ w) ++ "\n" ++ (show.gridWH.changes $ w) 
+              in writeFile path toWrite
+
+loadMap :: String -> IO ([(Int,Int)],(Int,Int))
+loadMap path = do handle <- openFile path ReadMode
+                  strMap <- hGetLine handle
+                  strGrid <- hGetLine handle
+                  hClose handle
+                  return ((read strMap :: [(Int,Int)]),read strGrid :: (Int,Int))
+
 ---------------------------------------------------------------------------------------------------
 {-Main-}
 
@@ -365,7 +377,7 @@ main = SDL.withInit [SDL.InitEverything] $ do
 
     SDL.setAlpha pic [SDL.SWSurface] 0
     SDL.setAlpha bl [SDL.SWSurface] 0
-    --map <- loadMap map'
+    mData <- loadMap map'
     let (cW,cH) = ((SDL.surfaceGetWidth pic),(SDL.surfaceGetHeight pic))        
     
 
@@ -375,10 +387,10 @@ main = SDL.withInit [SDL.InitEverything] $ do
         b0   = makeEntity bl (cW,cH) (ext [0],ext [0]) (ext [0],ext [0]) "white"
         f1   = makeEntity fg (cW,cH) (ext [0],ext [0]) (ext [0],ext [0]) "white"
 
-        world = buildWorld [] av [f1] [b0,b1] [] [] (Change [] 0 0 False False False [] False [] ((read w'),(read h'))) screen canvas
+        world = buildWorld [] av [f1] [b0,b1] [] [] (Change [map'] 0 0 False False False [] False (fst mData) (snd mData)) screen canvas
         spriteW = SDL.surfaceGetWidth $ surface $ avatar world
         spriteH = SDL.surfaceGetHeight $ surface $ avatar world 
-
+ 
     applySurface 0 0 pic screen
     putStrLn (show spriteH ++ " " ++ show spriteW)
     
@@ -399,7 +411,7 @@ main = SDL.withInit [SDL.InitEverything] $ do
             
             
             --putStrLn $ show (del)
-            putStrLn.show.mapData.changes $ w
+            --putStrLn.show.mapData.changes $ w
             
             unless (del == 0) (SDL.delay del)
             unless quit (loop nextWorld)
@@ -415,6 +427,7 @@ main = SDL.withInit [SDL.InitEverything] $ do
                   (SDL.KeyDown (SDL.Keysym SDL.SDLK_RIGHT _ _)) -> whileEvents (updateGrid w 1 0)
                   (SDL.KeyDown (SDL.Keysym SDL.SDLK_UP _ _)) -> whileEvents (updateGrid w 0 (-1))
                   (SDL.KeyDown (SDL.Keysym SDL.SDLK_DOWN _ _)) -> whileEvents (updateGrid w 0 1)
+                  (SDL.KeyDown (SDL.Keysym SDL.SDLK_s _ _)) -> saveData w >> whileEvents w
                   (SDL.MouseButtonDown x y SDL.ButtonLeft) -> whileEvents $ updateLMouse (x,y) w
                   (SDL.MouseButtonDown x y SDL.ButtonRight) -> whileEvents $ updateRMouse (x,y) w 
                   
