@@ -310,8 +310,7 @@ pixToMap w = let (gW,gH) = gridWH.changes $ w
                  (mX,mY) = (mouseX.changes $ w, mouseY.changes $ w)
                  ((cfx,cfy),_) = getCurrent.canvas $ w
                  (x,y) = (mX+cfx,mY+cfy)
-                 (cW,cH) = (SDL.surfaceGetWidth.surface.canvas $ w, SDL.surfaceGetHeight.surface.canvas $ w)
-                 [dx,dy,dCw,dCh,dGw,dGh] = map fromIntegral [x,y,cW,cH,gW,gH] 
+                 [dx,dy,dGw,dGh] = map fromIntegral [x,y,gW,gH] 
                  
              in  (floor (dx/dGw),floor (dy/dGh))
 
