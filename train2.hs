@@ -35,10 +35,12 @@ data World = World {
            bg      :: [Entity],
            miscFg  :: [Entity],
            miscBg  :: [Entity],
-           changes :: Change,
+           canvas  :: Entity, 
            screen  :: SDL.Surface,
-           canvas  :: Entity
-             }
+           changes :: Change,
+           mapData  :: [(Int,Int)],
+           gridWH   :: (Int,Int)
+           }
 
 data Change = Change {
            misc    :: [String],
@@ -47,14 +49,18 @@ data Change = Change {
            clicked :: Bool,
            enter   :: Bool,
            usrStr  :: String,
-           updated :: Bool,
-           mapData  :: [(Int,Int)],
-           gridWH   :: (Int,Int)
+           updated :: Bool
 }
 
-data Sound = Sound {
-           effects :: [Chunk],
-           music :: [Music]
+data Sound = SoundTrack Music | Effects [Effect] | None
+
+data Effect = Effect {
+           tag   :: String,
+           played :: Bool,
+           loop :: Int,
+           audio :: Chunk,
+           volume :: Int,
+           channel :: Maybe Int
 }
 
 ---------------------------------------------------------------------------------------------------
@@ -66,6 +72,7 @@ canvasWidth = 1920
 canvasHeight = 450
 
 nbrFrameSprite = 8
+defVol = 50
 
 yure = slow 5 $ osc 0 25 1
 
@@ -82,6 +89,7 @@ main = SDL.withInit [SDL.InitEverything] $ do
 
     music   <- loadMUS "train.mp3"
     step    <- loadWAV "step.wav"
+    bubble  <- loadWAV "bubbles.wav" 
     mData   <- loadMap "mapFile" 
 
     l0 <- loadImage "Layer.png" 
@@ -97,7 +105,7 @@ main = SDL.withInit [SDL.InitEverything] $ do
 
     SDL.setAlpha ca [SDL.SWSurface] 0
 
-    let canvas = makeEntity ca (screenWidth,screenHeight) (ext[0], yure) (ext [0], ext [0]) "canvas" 
+    let canvas = addMusic music $ makeEntity ca (screenWidth,screenHeight) (ext[0], yure) (ext [0], ext [0]) "canvas" 
         land = makeEntity l2 (canvasWidth,canvasHeight) (cycle [3840,3830..0],ext [0]) (ext [0],ext [0]) "land"
         av   = makeEntity s2 (320,240) (ext[1920],ext [0]) (ext[50],ext [150]) "avatar"
         b1   = makeEntity bg (canvasWidth,canvasHeight) (ext [0],ext [0]) (ext [0],ext [0]) "back1"
@@ -105,11 +113,11 @@ main = SDL.withInit [SDL.InitEverything] $ do
         f1   = linkEntities b1 $ makeBg l1 "back3"
         
         smallLady = makeEntity s1 (320,240) (slow 30 $ cycle [0,320..1280],ext [0]) (ext [250],ext [71])  "smallLady"
-        newLady   = addSound step $ makeEntity s2 (320,240) (slow 10 $ cycle [0,320..2240],ext [0]) (ext [650],ext [150]) "newLady"
-        fish      = makeEntity fi (64,38) (slow 10 $ cycle [0,64..448],ext [0]) (ext [610],ext [155]) "sushi"
+        newLady   = makeEntity s2 (320,240) (slow 10 $ cycle [0,320..2240],ext [0]) (ext [650],ext [150]) "newLady"
+        fish      = addSound bubble "bubble" $ makeEntity fi (64,38) (slow 10 $ cycle [0,64..448],ext [0]) (ext [610],ext [155]) "sushi"
         
         
-        world = addMusic music $ buildWorld [land] av [f1] [b1,b2] [newLady] [smallLady,fish] (Change [] 0 0 False False [] False (fst mData) (snd mData)) screen canvas
+        world = World av [land] [f1] [b1,b2] [newLady] [smallLady,fish] canvas screen (Change [] 0 0 False False [] False ) (fst mData) (snd mData)
 
         -- buildWorld l av f b m1 m2 c s 
 
@@ -158,17 +166,8 @@ main = SDL.withInit [SDL.InitEverything] $ do
 ---------------------------------------------------------------------------------------------------
 {-Data Initialisation-}
 
-buildWorld :: [Entity] -> Entity -> [Entity] -> [Entity] -> [Entity] -> [Entity] -> Change -> SDL.Surface -> Entity -> World
-buildWorld l av f b m1 m2 c s ca = World { avatar  = av,
-	                                    land    = l,
-	                                    fg      = f,
-	                                    bg      = b,
-	                                    miscFg  = m1,
-	                                    miscBg  = m2,
-	                                    changes = c,
-	                                    screen  = s,
-                                      canvas  = ca
-                                      } 
+--buildWorld :: [Entity] -> Entity -> [Entity] -> [Entity] -> [Entity] -> [Entity] -> Change -> SDL.Surface -> Entity -> [(Int,Int)] -> (Int,Int) -> World
+--buildWorld l av f b m1 m2 c s ca = World 
 
 makeBg :: SDL.Surface -> String -> Entity
 makeBg src name = Entity { name = name,
@@ -178,7 +177,7 @@ makeBg src name = Entity { name = name,
                                                            SDL.rectY = 0,
                                                            SDL.rectW = 0,
                                                            SDL.rectH = 0 }],
-                          audioData = Sound [] []
+                          audioData = None
                         }
 
 makeEntity :: SDL.Surface -> (Int,Int) -> ([Int],[Int]) -> ([Int],[Int]) ->String -> Entity
@@ -186,7 +185,7 @@ makeEntity src (fw,fh) (fxs,fys) (xs,ys) name = Entity { name = name,
                                                    surface = src,
                                                    frameList = makeRect (fw,fh) fxs fys,
                                                    posList = makeRect (0,0) xs ys,
-                                                   audioData = Sound [] []
+                                                   audioData = None
                                                    }
   where makeRect _ [] [] = cycle [Nothing]
         makeRect  (w,h) (x:xs) (y:ys) = Just SDL.Rect { SDL.rectX = x,
@@ -243,7 +242,8 @@ nextEntity img = Entity {surface = surface img,
 
 renderEntity :: Entity -> SDL.Surface -> IO Entity
 renderEntity src dest = do SDL.blitSurface (surface src) (head.frameList $ src)  dest (head.posList $ src)
-                           return (nextEntity src)
+                           newSrc <- playSounds src
+                           return (nextEntity newSrc)
 
 
 renderEntities :: [Entity] -> SDL.Surface -> IO [Entity] 
@@ -260,18 +260,15 @@ renderWorld wo = let w = fixCamera wo in
                      newFg     <- renderEntities (fg w) (surface $ canvas w)
                      newCan    <- renderEntity (canvas w) (screen w)
 
-                  
-                     let newWorld = World { avatar  = av,
-                                            land    = l,
-                                            fg      = newFg,
-                                            bg      = newBg,
-                                            miscFg  = newMiscFg,
-                                            miscBg  = newMiscBg,
-                                            changes = changes w,
-                                            screen  = screen w,
-                                            canvas  = newCan
-                                           }
-                     return newWorld 
+                     return w { avatar  = av,
+                                        land    = l,
+                                        fg      = newFg,
+                                        bg      = newBg,
+                                        miscFg  = newMiscFg,
+                                        miscBg  = newMiscBg,
+                                        changes = changes w,
+                                        canvas  = newCan
+                                       }
 
 --------------------------------------------------------------------------------------------------
 {- avatar movment-}
@@ -279,11 +276,11 @@ renderWorld wo = let w = fixCamera wo in
 goTo :: (Int,Int) -> World -> World
 goTo (x,y) w = let origin = (pixToMap w).avatarCenter $ w
                    dest = pixToMap w (x,y)
-                   newDest = if elem dest (mapData.changes $ w) 
+                   newDest = if elem dest (mapData w) 
                              then dest
-                             else findClosest (mapData.changes $ w) dest
+                             else findClosest (mapData w) dest
 
-                   mapPath = (pathFinder (mapData.changes $ w) origin newDest)
+                   mapPath = (pathFinder (mapData w) origin newDest)
                    path = interpolate.(fixPath w) $ map (\c -> mapToPix w c) mapPath
                                                 
                    fl = ext (makeFrameList w path)
@@ -398,22 +395,49 @@ loadImage filename = SDLI.load filename  >>= SDL.displayFormatAlpha
 ---------------------------------------------------------------------------------------------------
 {- Sound -}
 
-addMusic :: Music -> World -> World
-addMusic m w = w {canvas = (canvas w){audioData = (audioData (canvas w)) {music = [m]}}}
 
-addSound :: Chunk -> Entity -> Entity
-addSound s e = e {audioData =  (audioData e){effects = s:(effects.audioData $ e)}} 
+addMusic :: Music -> Entity -> Entity
+addMusic m e = e {audioData = SoundTrack m}
+
+addSound :: Chunk -> String -> Entity -> Entity
+addSound s t e = 
+  let ad = audioData e
+  in case ad of None -> e {audioData = Effects [Effect t False 0 s defVol Nothing]}
+                SoundTrack _ -> e {audioData = Effects [Effect t False 0 s defVol Nothing]}
+                Effects eff  -> e {audioData = Effects ((Effect t False 0 s defVol Nothing):eff)}
+
 
 refreshMus = playingMusic
 
-playMus w = playMusic (head $ music (audioData (canvas w))) (-1) 
+playMus :: World -> IO ()
+playMus w = case audioData.canvas $ w of
+             SoundTrack m -> playMusic m (-1)
+             otherwise -> return ()
+
+
+playSounds :: Entity -> IO Entity
+playSounds e =
+  case audioData e of
+    None -> return e
+    SoundTrack _ -> return e
+    Effects fs -> do newEff <- sequence (map play fs)
+                     return e {audioData = Effects newEff}
+
+    where play f | not $ played f = return f
+                 | otherwise = 
+                    case (channel f) of 
+                      Nothing -> do newC <- playChannel (-1) (audio f) (loop f)
+                                    return f { channel = Just newC }
+
+                      Just ch -> playChannel (-1) (audio f) (loop f) >> return f
+
 
 ---------------------------------------------------------------------------------------------------
 {- File processing -}
 
 saveData :: World -> IO ()
 saveData w = let path = head.misc.changes $ w
-                 toWrite = (show.mapData.changes $ w) ++ "\n" ++ (show.gridWH.changes $ w) 
+                 toWrite = (show.mapData $ w) ++ "\n" ++ (show.gridWH $ w) 
               in writeFile path toWrite
 
 loadMap :: String -> IO ([(Int,Int)],(Int,Int))
@@ -463,14 +487,14 @@ makeFrameRect (x:xs) h w = Just SDL.Rect {SDL.rectX = fst x,
 
 
 pixToMap :: World -> (Int,Int) -> (Int,Int)
-pixToMap w (x,y) = let (gW,gH) = gridWH.changes $ w
+pixToMap w (x,y) = let (gW,gH) = gridWH $ w
                        [dx,dy,dGw,dGh] = map fI [x,y,gW,gH] 
                    in  (round (dx/dGw),round (dy/dGh))
 
 
 
 mapToPix :: World -> (Int,Int) -> (Int,Int)
-mapToPix  w (x,y) = let (gW,gH) = gridWH.changes $ w
+mapToPix  w (x,y) = let (gW,gH) = gridWH $ w
                         [dx,dy,dGw,dGh] = map fI [x,y,gW,gH] 
                     in  (dx*dGw,dy*dGh)                   
 
@@ -537,3 +561,4 @@ deleteAllBy p (x:xs) | (p x) = deleteAllBy  p xs
 
 fI :: (Integral a, Num b) => a -> b
 fI = fromIntegral
+
