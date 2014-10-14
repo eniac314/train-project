@@ -25,6 +25,7 @@ data Entity = Entity {
              surface   :: SDL.Surface,
              frameList :: [Maybe SDL.Rect],
              posList   :: [Maybe SDL.Rect],
+             audioList :: [AudioTag],
              audioData :: Sound
              }
 
@@ -54,12 +55,14 @@ data Change = Change {
 
 data Sound = SoundTrack Music | Effects [Effect] | None
 
+type AudioTag = Maybe (String,Bool,Int,Int)
+
 data Effect = Effect {
            tag   :: String,
            played :: Bool,
            loop :: Int,
            audio :: Chunk,
-           volume :: Int,
+           vol :: Int,
            channel :: Maybe Int
 }
 
@@ -107,7 +110,7 @@ main = SDL.withInit [SDL.InitEverything] $ do
 
     let canvas = addMusic music $ makeEntity ca (screenWidth,screenHeight) (ext[0], yure) (ext [0], ext [0]) "canvas" 
         land = makeEntity l2 (canvasWidth,canvasHeight) (cycle [3840,3830..0],ext [0]) (ext [0],ext [0]) "land"
-        av   = makeEntity s2 (320,240) (ext[1920],ext [0]) (ext[50],ext [150]) "avatar"
+        av   = addSound step "step" $ makeEntity s2 (320,240) (ext[1920],ext [0]) (ext[50],ext [150]) "avatar"
         b1   = makeEntity bg (canvasWidth,canvasHeight) (ext [0],ext [0]) (ext [0],ext [0]) "back1"
         b2   = linkEntities b1 $ makeBg l0 "back2"
         f1   = linkEntities b1 $ makeBg l1 "back3"
@@ -116,10 +119,9 @@ main = SDL.withInit [SDL.InitEverything] $ do
         newLady   = makeEntity s2 (320,240) (slow 10 $ cycle [0,320..2240],ext [0]) (ext [650],ext [150]) "newLady"
         fish      = addSound bubble "bubble" $ makeEntity fi (64,38) (slow 10 $ cycle [0,64..448],ext [0]) (ext [610],ext [155]) "sushi"
         
-        
-        world = World av [land] [f1] [b1,b2] [newLady] [smallLady,fish] canvas screen (Change [] 0 0 False False [] False ) (fst mData) (snd mData)
 
-        -- buildWorld l av f b m1 m2 c s 
+        world = World av [land] [f1] [b1,b2] [newLady] [smallLady,fish] canvas screen (Change [] 0 0 False False [] False ) (fst mData) (snd mData)
+        
 
     playMus world
     setMusicVolume 24
@@ -154,7 +156,7 @@ main = SDL.withInit [SDL.InitEverything] $ do
              event      <- SDL.pollEvent
              case event of
                   SDL.Quit -> return (True,w)
-                  (SDL.KeyDown (SDL.Keysym SDL.SDLK_SPACE _ _)) -> whileEvents w
+                  (SDL.KeyDown (SDL.Keysym SDL.SDLK_SPACE _ _)) -> whileEvents (applyToEntity w "sushi" (\e -> e {audioList = ext [Just ("bubble",True,0,2)]}))
                   (SDL.KeyDown (SDL.Keysym SDL.SDLK_LEFT _ _)) -> whileEvents w
                   (SDL.KeyDown (SDL.Keysym SDL.SDLK_RIGHT _ _)) -> whileEvents w
                   (SDL.MouseButtonDown x y _) -> whileEvents $ updateMouse (x,y) w 
@@ -166,9 +168,6 @@ main = SDL.withInit [SDL.InitEverything] $ do
 ---------------------------------------------------------------------------------------------------
 {-Data Initialisation-}
 
---buildWorld :: [Entity] -> Entity -> [Entity] -> [Entity] -> [Entity] -> [Entity] -> Change -> SDL.Surface -> Entity -> [(Int,Int)] -> (Int,Int) -> World
---buildWorld l av f b m1 m2 c s ca = World 
-
 makeBg :: SDL.Surface -> String -> Entity
 makeBg src name = Entity { name = name,
                           surface = src,
@@ -177,7 +176,8 @@ makeBg src name = Entity { name = name,
                                                            SDL.rectY = 0,
                                                            SDL.rectW = 0,
                                                            SDL.rectH = 0 }],
-                          audioData = None
+                          audioData = None,
+                          audioList = ext [Nothing]
                         }
 
 makeEntity :: SDL.Surface -> (Int,Int) -> ([Int],[Int]) -> ([Int],[Int]) ->String -> Entity
@@ -185,7 +185,8 @@ makeEntity src (fw,fh) (fxs,fys) (xs,ys) name = Entity { name = name,
                                                    surface = src,
                                                    frameList = makeRect (fw,fh) fxs fys,
                                                    posList = makeRect (0,0) xs ys,
-                                                   audioData = None
+                                                   audioData = None,
+                                                   audioList = ext [Nothing]
                                                    }
   where makeRect _ [] [] = cycle [Nothing]
         makeRect  (w,h) (x:xs) (y:ys) = Just SDL.Rect { SDL.rectX = x,
@@ -212,39 +213,10 @@ updateMouse (x,y) w = w {changes = (changes w) {mouseX = fI x, mouseY = fI y,cli
 -----------------------------------------------------------------------------------------------------
 {-Rendering-}
 
-fixCamera :: World -> World
-fixCamera w = let (_,(apx,apy)) = getCurrent $ avatar w
-                  ((cfx,cfy),_) = getCurrent $ canvas w
-                  
-                  
-                  newFX | s == 0 = cfx
-                        | (apx > cfx + 300) && (cfx + (abs s) < (canvasWidth - screenWidth)) = cfx + (abs s) 
-                        | (apx < cfx + 45 ) && (cfx - (abs s) > 0) = cfx - (abs s)
-                        | otherwise = cfx
-                  
-                  newFl [] = []
-                  newFl (f:fs) = case f of Nothing -> []
-                                           Just r -> Just (r {SDL.rectX = newFX}): newFl fs 
-                  
-              in w {canvas = (canvas w) {frameList = newFl $ frameList (canvas w)}}              
-              
-              where s = computeSpeed $ avatar w
-
-
-nextEntity :: Entity -> Entity
-nextEntity img = Entity {surface = surface img,
-                       frameList = tail $ frameList img,
-                       posList = tail $ posList img,
-                       name = name img,
-                       audioData = audioData img
-                     }
-
-
 renderEntity :: Entity -> SDL.Surface -> IO Entity
 renderEntity src dest = do SDL.blitSurface (surface src) (head.frameList $ src)  dest (head.posList $ src)
-                           newSrc <- playSounds src
+                           newSrc <- playSounds.prepSound $ src
                            return (nextEntity newSrc)
-
 
 renderEntities :: [Entity] -> SDL.Surface -> IO [Entity] 
 renderEntities xs dest = sequence $ map (\im -> renderEntity im dest) xs
@@ -270,6 +242,35 @@ renderWorld wo = let w = fixCamera wo in
                                         canvas  = newCan
                                        }
 
+
+fixCamera :: World -> World
+fixCamera w = let (_,(apx,apy)) = getCurrent $ avatar w
+                  ((cfx,cfy),_) = getCurrent $ canvas w
+                  
+                  
+                  newFX | s == 0 = cfx
+                        | (apx > cfx + 300) && (cfx + (abs s) < (canvasWidth - screenWidth)) = cfx + (abs s) 
+                        | (apx < cfx + 45 ) && (cfx - (abs s) > 0) = cfx - (abs s)
+                        | otherwise = cfx
+                  
+                  newFl [] = []
+                  newFl (f:fs) = case f of Nothing -> []
+                                           Just r -> Just (r {SDL.rectX = newFX}): newFl fs 
+                  
+              in w {canvas = (canvas w) {frameList = newFl $ frameList (canvas w)}}              
+              
+              where s = computeSpeed $ avatar w
+
+
+nextEntity :: Entity -> Entity
+nextEntity e = Entity {surface = surface e,
+                       frameList = tail $ frameList e,
+                       posList = tail $ posList e,
+                       name = name e,
+                       audioData = audioData e,
+                       audioList = tail $ audioList e
+                     }
+
 --------------------------------------------------------------------------------------------------
 {- avatar movment-}
 
@@ -285,7 +286,9 @@ goTo (x,y) w = let origin = (pixToMap w).avatarCenter $ w
                                                 
                    fl = ext (makeFrameList w path)
 
-               in w {avatar = (avatar w){ posList = makePosRect.ext $ path, frameList = fl}}
+                   audLi = ext  ((take (length path - 10) $ cycle [Just ("step",True,(0),25)])++[Just ("step",False,(0),25),Nothing])
+
+               in w {avatar = (avatar w){ posList = makePosRect.ext $ path, frameList = fl, audioList = audLi}}
 
 avatarCenter :: World -> (Int,Int)
 avatarCenter w = let (_,(apx,apy)) = getCurrent $ avatar w
@@ -427,11 +430,34 @@ playSounds e =
                  | otherwise = 
                     case (channel f) of 
                       Nothing -> do newC <- playChannel (-1) (audio f) (loop f)
+                                    volume newC (vol f)
                                     return f { channel = Just newC }
 
-                      Just ch -> playChannel (-1) (audio f) (loop f) >> return f
+                      Just ch -> do playing <- isChannelPlaying ch
+                                    if playing
+                                    then return f
+                                    else playChannel ch (audio f) (loop f) >> volume ch (vol f) >> return f
 
 
+prepSound :: Entity -> Entity
+prepSound e =
+ case head.audioList $ e of
+  Nothing -> e
+  Just (tag,played,loop,vol) -> changeSound e tag played loop vol
+
+
+changeSound :: Entity -> String -> Bool -> Int -> Int -> Entity
+changeSound e t b l v =
+ case audioData e of
+  None -> e
+  SoundTrack _ -> e
+  Effects eff  -> let go [] = []
+                      go (f:fs) 
+                       | (tag f) == t = (f {played = b, loop = l, vol = v, channel = if b then channel f else Nothing}):go fs 
+                       | otherwise    = f:(go fs)
+                  
+                      newEff = go eff
+                  in e {audioData = Effects newEff}  
 ---------------------------------------------------------------------------------------------------
 {- File processing -}
 
@@ -503,16 +529,31 @@ mapToPix  w (x,y) = let (gW,gH) = gridWH $ w
 
 
 linkEntities :: Entity -> Entity -> Entity
-linkEntities main child = Entity { name = name child,
-                                   surface = surface child,
-                                   frameList = frameList main,
-                                   posList = posList main,
-                                   audioData = audioData child
-                                  }
+linkEntities main child = child {posList = posList main, frameList = frameList main}
 
 computeSpeed :: Entity -> Int
 computeSpeed i = case posList $ i of (Just a: Just b:rs) -> SDL.rectX b - SDL.rectX a
                                      _ -> 0
+
+applyToEntity :: World -> String -> (Entity -> Entity) -> World
+applyToEntity w tag f | tag == "avatar" = w {avatar = f (avatar w)}
+                      | tag == "canvas" = w {canvas = f (canvas w)}
+                      | otherwise =
+                         let newLand = go (land w)
+                             newFg = go (fg w)
+                             newBg = go (bg w)
+                             newMiscFg = go (miscFg w)
+                             newMiscBg = go (miscBg w)
+                         in w {land = newLand,
+                               fg = newFg,
+                               bg = newBg,
+                               miscFg = newMiscFg,
+                               miscBg = newMiscBg}
+                         
+                         where go []     = []
+                               go (e:es) | (name e) == tag = (f e):go es
+                                         | otherwise       = e:go es 
+
 
 --------------------------------------------------------------------------------------------------------
 {- misc helper functions-}
