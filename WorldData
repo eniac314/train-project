@@ -1,0 +1,10 @@
+// Things and related actions 
+
+T Window go look
+T fishBowl go take look putOn
+
+
+//NPC and related actions 
+NPC newLady go look talk kick
+NPC smallLady go look talk kiss
+NPC sushi go talk eat

@@ -1,0 +1,34 @@
+// list of actions:
+
+V push
+V pull
+V open
+V close
+V walk_to
+V put_on
+V take_off
+V turn_on
+V turn_off
+V switch
+V pick_up take 
+V use
+V give
+V look_at look_through look
+V read
+V eat
+V go_to go
+V kick hit  
+
+// Nouns
+
+N Sushi fishBowl
+N the_old_lady the_lady lady
+N chair
+N window
+
+// Adjectives
+
+Adj blue
+Adj red
+Adj happy
+

@@ -5,9 +5,11 @@ import GHC.Int
 import GHC.ForeignPtr
 import Data.Bits
 import Data.List
+import Data.List.Split
 import Data.Maybe (fromJust)
 import qualified Graphics.UI.SDL as SDL
 import qualified Graphics.UI.SDL.Primitives as SDLP
+import qualified Graphics.UI.SDL.TTF as SDLT
 import qualified Graphics.UI.SDL.Image as SDLI
 import Graphics.UI.SDL.Mixer
 import qualified Data.Map as Map
@@ -42,7 +44,8 @@ data World = World {
            screen  :: SDL.Surface,
            changes :: Change,
            mapData  :: [(Int,Int)],
-           gridWH   :: (Int,Int)
+           gridWH   :: (Int,Int),
+           font     :: SDLT.Font
            }
 
 data Change = Change {
@@ -75,6 +78,13 @@ screenWidth = 1000
 screenHeight = 650
 canvasWidth = 1920
 canvasHeight = 450
+terminalHeight = screenHeight - canvasHeight :: Int
+terminalWidth = round (0.70 * fI screenWidth) :: Int
+
+fontName = "Ubuntu-M.ttf"
+fontSize = 14 :: Int
+
+lineFormat = round $ 1.1 * ((fI terminalWidth) / ((fI fontSize) / 2))
 
 nbrFrameSprite = 8
 defVol = 50
@@ -84,6 +94,7 @@ yure = slow 5 $ osc 0 25 1
 
 
 main = SDL.withInit [SDL.InitEverything] $ do
+    SDLT.init
     screen <- SDL.setVideoMode screenWidth screenHeight 32 [SDL.SWSurface]
 
     SDL.setAlpha screen [SDL.SWSurface] 0
@@ -104,31 +115,36 @@ main = SDL.withInit [SDL.InitEverything] $ do
     l2 <- loadImage "Layer #3.png"
     s1 <- loadImage "spriteSheet1.png"
     s2 <- loadImage "spriteSheet2.png"
+    --ca <- SDL.createRGBSurface [SDL.SWSurface] canvasWidth canvasHeight 32 255 255 255 0
     ca <- loadImage "blanck.png"
     fi <- loadImage "fish.png"
+    iN <- loadImage "black.png"
+
+    fnt <- SDLT.openFont fontName fontSize
 
     SDL.setAlpha ca [SDL.SWSurface] 0
 
-    let canvas = addMusic music $ makeEntity ca (screenWidth,screenHeight) (ext[0], ext[0]) (ext [0], ext [0]) 1 "canvas" 
-        land = makeEntity l2 (canvasWidth,canvasHeight) (cycle [3840,3830..0],ext [0]) (ext [0],ext [0]) 1 "land"
+    let canvas = addMusic music $ makeEntity ca (surfaceSize ca) (ext[0], ext[0]) static 1 "canvas" 
+        land = makeEntity l2 (canvasWidth,canvasHeight) (cycle [3840,3830..0],ext [0]) static 1 "land"
         av   = addSound step "step" $ makeEntity s2 (320,240) (ext[1920],ext [0]) (ext[50],ext [150]) 8 "avatar"
-        b1   = makeEntity bg (canvasWidth,canvasHeight) (ext [0],ext [0]) (ext [0],ext [0]) 1 "back1"
+        b1   = makeEntity bg (canvasWidth,canvasHeight) (ext [0],ext [0]) static 1 "back1"
         b2   = linkEntities b1 $ makeBg l0 "back2"
         f1   = linkEntities b1 $ makeBg l1 "back3"
-
+        int  = makeEntity iN (surfaceSize iN) (ext[0], ext[0]) (pos (0,canvasHeight)) 1 "interface"
         
-        smallLady = makeEntity s1 (320,240) (slow 30 $ cycle [0,320..1280],ext [0]) (ext [250],ext [71])  5 "smallLady"
-        newLady   = makeEntity s2 (320,240) (slow 10 $ cycle [0,320..2240],ext [0]) (ext [650],ext [150]) 8 "newLady"
-        fish      = addSound bubble "bubble" $ makeEntity fi (64,38) (slow 10 $ cycle [0,64..448],ext [0]) (ext [610],ext [155]) 8 "sushi"
+        smallLady = makeEntity s1 (320,240) (slow 30 $ cycle [0,320..1280],ext [0]) (pos (250,71))  5 "smallLady"
+        newLady   = makeEntity s2 (320,240) (slow 10 $ cycle [0,320..2240],ext [0]) (pos (650,150)) 8 "newLady"
+        fish      = addSound bubble "bubble" $ makeEntity fi (64,38) (slow 10 $ cycle [0,64..448],ext [0]) (pos (610,155)) 8 "sushi"
         
 
-        world = World av [land] [f1] [b1,b2] [newLady] [smallLady,fish] canvas [] screen (Change [] 0 0 False False [] False ) (fst mData) (snd mData)
+        world = World av [land] [f1] [b1,b2] [newLady] [smallLady,fish] canvas [int] screen (Change [] 0 0 False False [] False ) (fst mData) (snd mData) fnt
         
 
     playMus world
     setMusicVolume 24
     loop world
     closeAudio
+    SDLT.quit
 
     where loop w = do
             
@@ -235,6 +251,18 @@ renderWorld wo = let w = fixRelPos.fixCamera $ wo in
                      newMiscFg <- renderEntities (miscFg w) (surface $ canvas w)
                      newFg     <- renderEntities (fg w) (surface $ canvas w)
                      newCan    <- renderEntity (canvas w) (screen w)
+                     newMenu   <- renderEntities (menu w) (screen w)
+
+                     let ls = linesToSur [((0,canvasHeight),(screenWidth-1 ,canvasHeight)),
+                                          ((0,screenHeight-1),(screenWidth-1,screenHeight-1)),
+                                          ((0,canvasHeight),(0,screenHeight-1)),
+                                          ((screenWidth-1,canvasHeight),(screenWidth - 1,screenHeight-1)),
+                                          ((terminalWidth, canvasHeight),(terminalWidth,screenHeight))] (screen w) (getPixel 0 0 255)
+
+                     sequence ls
+                     
+                     textToSur "While the ever-shifting, untrustworthy presentation adds to the general creepiness of the horror-trope skeleton, the entire narrative is so under-explained and flatly acted that none of it feels memorable. Moreover, the game never makes you connect to the people barely surviving its story. It's not that Evil Within needs to aim to be another Last of Us. But more time spent on crafting the characters would have given the game-makers another way to make players uneasy. Sebastian's personality is so blase it doesn't feel like he - or, more importantly, the player - has anything at stake. There's no charm or idiosyncrasy to these heroes or villains. They exist to be embittered or endangered and that's it. This lack of connection makes The Evil Within feel more like the work of an old master who hasn't quite absorbed the changes that his medium has gone through." (font w) (surface.head.menu $ w)
+
 
                      return w { avatar  = av,
                                         land    = l,
@@ -242,7 +270,8 @@ renderWorld wo = let w = fixRelPos.fixCamera $ wo in
                                         bg      = newBg,
                                         miscFg  = newMiscFg,
                                         miscBg  = newMiscBg,
-                                        canvas  = newCan
+                                        canvas  = newCan,
+                                        menu    = newMenu
                                        }
 
 
@@ -408,8 +437,32 @@ getPixel r g b = SDL.Pixel $ (shiftL (fi r) 24 .|. shiftL (fi g) 16 .|. shiftL (
 pixelsToScreen :: [Point] -> SDL.Surface -> SDL.Pixel -> [IO Bool]
 pixelsToScreen xs s p = map (\(x,y) -> SDLP.pixel s (fI.round $ x) (fI.round $ y) p) xs
 
+linesToSur :: [((Int,Int),(Int,Int))] -> SDL.Surface -> SDL.Pixel -> [IO Bool]
+linesToSur xs s p = map (\((x1,y1),(x2,y2)) -> SDLP.line s (fI x1) (fI y1) (fI x2) (fI y2) p) xs
+
 loadImage :: String -> IO SDL.Surface
 loadImage filename = SDLI.load filename  >>= SDL.displayFormatAlpha
+
+applySurface :: Int -> Int -> SDL.Surface -> SDL.Surface -> IO Bool
+applySurface x y src dst = SDL.blitSurface src clip dst offset
+ where offset = Just SDL.Rect { SDL.rectX = x, SDL.rectY = y, SDL.rectW = 0, SDL.rectH = 0 }
+       clip = Just SDL.Rect { SDL.rectX = 0, SDL.rectY = 0, SDL.rectW = fst $ surfaceSize src, SDL.rectH = snd $ surfaceSize src }
+---------------------------------------------------------------------------------------------------
+{- Terminal Interface -}
+
+getTextSurface :: String -> SDLT.Font -> IO SDL.Surface
+getTextSurface s f = SDLT.renderTextSolid f s (SDL.Color 255 255 255)
+
+textToSur :: String -> SDLT.Font -> SDL.Surface -> IO Bool
+textToSur text f out = let ts = concat $ (format lineFormat) (lines text)
+                           sl = map (flip getTextSurface $ f) (drop (length ts - 7) ts)
+                       in do ls <- sequence sl
+                             foldl' (\a (s,(x,y)) -> do b1 <- a
+                                                        b2 <- applySurface x y s out
+                                                        return (b1 && b2)) (return True) (zip ls [(5,y) | y <- [5,25..]])
+
+    
+
 
 ---------------------------------------------------------------------------------------------------
 {- Sound -}
@@ -561,11 +614,14 @@ applyToEntity w tag f | tag == "avatar" = w {avatar = f (avatar w)}
                              newBg = go (bg w)
                              newMiscFg = go (miscFg w)
                              newMiscBg = go (miscBg w)
+                             newMenu = go (menu w)
                          in w {land = newLand,
                                fg = newFg,
                                bg = newBg,
                                miscFg = newMiscFg,
-                               miscBg = newMiscBg}
+                               miscBg = newMiscBg,
+                               menu = newMenu
+                             }
                          
                          where go []     = []
                                go (e:es) | (name e) == tag = (f e):go es
@@ -576,6 +632,12 @@ entityCenter e = let (_,(apx,apy)) = getCurrent e
                      spriteW = div (SDL.surfaceGetWidth $ surface e) (nbrFrame e)
                      spriteH = SDL.surfaceGetHeight $ surface e
                  in (apx+(quot spriteW 2),apy+(quot spriteH 2))
+
+surfaceSize :: SDL.Surface -> (Int,Int)
+surfaceSize s = (SDL.surfaceGetWidth s, SDL.surfaceGetHeight s)
+
+static = (ext [0],ext [0])
+pos (x,y) = (ext [x],ext [y])
 --------------------------------------------------------------------------------------------------------
 {- misc helper functions-}
 
@@ -617,9 +679,18 @@ findNearby (x,y,n) = [(x+1,y,n+1),(x,y+1,n+1),(x-1,y,n+1),(x,y-1,n+1)]
 
 
 deleteAllBy :: (a -> Bool) -> [a] -> [a]
-deleteAllBy p [] = []
-deleteAllBy p (x:xs) | (p x) = deleteAllBy  p xs
-                     | otherwise = x:deleteAllBy p xs
+deleteAllBy p = filter (not.p)
 
 fI :: (Integral a, Num b) => a -> b
 fI = fromIntegral
+
+format :: Int -> [String] -> [[String]]
+format  n xs = let chunk _ [] = ([],[])
+                   chunk n (x:xs) | n == 0 = ([x],xs)
+                               | n < 15 && x == ' ' = ([x],xs) 
+                               | otherwise = let (a,b) = chunk (n-1) xs in (x:a,b)
+                   
+                   go cs = case (chunk n cs) of (c,[]) -> [c]
+                                                (c,r)  -> [c] ++ go r
+
+               in map go xs
