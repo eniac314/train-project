@@ -14,7 +14,7 @@ import qualified Graphics.UI.SDL.Image as SDLI
 import Graphics.UI.SDL.Mixer
 import qualified Data.Map as Map
 import System.IO
-
+import ChatBot
 
 
 {-# LANGUAGE BangPatterns #-}
@@ -40,12 +40,14 @@ data World = World {
            miscFg  :: [Entity],
            miscBg  :: [Entity],
            canvas  :: Entity,
-           menu    :: [Entity], 
+           menu    :: [Entity],
+           inventory :: [Entity], 
            screen  :: SDL.Surface,
            changes :: Change,
            mapData  :: [(Int,Int)],
            gridWH   :: (Int,Int),
-           font     :: SDLT.Font
+           font     :: SDLT.Font,
+           botData  :: BotData
            }
 
 data Change = Change {
@@ -54,6 +56,7 @@ data Change = Change {
            mouseY  :: Int,
            clicked :: Bool,
            enter   :: Bool,
+           buffer  :: [String],
            usrStr  :: String,
            updated :: Bool
 }
@@ -81,10 +84,10 @@ canvasHeight = 450
 terminalHeight = screenHeight - canvasHeight :: Int
 terminalWidth = round (0.70 * fI screenWidth) :: Int
 
-fontName = "Ubuntu-M.ttf"
+fontName = "DejaVuSansMono.ttf"
 fontSize = 14 :: Int
 
-lineFormat = round $ 1.1 * ((fI terminalWidth) / ((fI fontSize) / 2))
+lineFormat = round $ 0.9 * ((fI terminalWidth) / ((fI fontSize) / 2)) :: Int
 
 nbrFrameSprite = 8
 defVol = 50
@@ -119,10 +122,16 @@ main = SDL.withInit [SDL.InitEverything] $ do
     ca <- loadImage "blanck.png"
     fi <- loadImage "fish.png"
     iN <- loadImage "black.png"
+    bL <- loadImage "black.png"
+
+    cu <- loadImage "cursor.png"
+
+    dics <- initChatBot
 
     fnt <- SDLT.openFont fontName fontSize
 
     SDL.setAlpha ca [SDL.SWSurface] 0
+    SDL.setAlpha iN [SDL.SWSurface] 0
 
     let canvas = addMusic music $ makeEntity ca (surfaceSize ca) (ext[0], ext[0]) static 1 "canvas" 
         land = makeEntity l2 (canvasWidth,canvasHeight) (cycle [3840,3830..0],ext [0]) static 1 "land"
@@ -131,20 +140,20 @@ main = SDL.withInit [SDL.InitEverything] $ do
         b2   = linkEntities b1 $ makeBg l0 "back2"
         f1   = linkEntities b1 $ makeBg l1 "back3"
         int  = makeEntity iN (surfaceSize iN) (ext[0], ext[0]) (pos (0,canvasHeight)) 1 "interface"
-        
-        smallLady = makeEntity s1 (320,240) (slow 30 $ cycle [0,320..1280],ext [0]) (pos (250,71))  5 "smallLady"
-        newLady   = makeEntity s2 (320,240) (slow 10 $ cycle [0,320..2240],ext [0]) (pos (650,150)) 8 "newLady"
+        bl   = makeEntity bL (surfaceSize bL) (ext[0], ext[0]) (static) 1 "black"
+        curs = makeEntity cu (surfaceSize cu) (slow 30 $ cycle [0,10],ext [0]) (ext [5],ext [terminalHeight-26]) 2 "cursor"
+
+        smallLady = makeEntity s1 (320,240) (slow 30 $ cycle [0,320..1280],ext [0]) (pos (250,71))  5 "smalllady"
+        newLady   = makeEntity s2 (320,240) (slow 10 $ cycle [0,320..2240],ext [0]) (pos (650,150)) 8 "newlady"
         fish      = addSound bubble "bubble" $ makeEntity fi (64,38) (slow 10 $ cycle [0,64..448],ext [0]) (pos (610,155)) 8 "sushi"
         
-
-        world = World av [land] [f1] [b1,b2] [newLady] [smallLady,fish] canvas [int] screen (Change [] 0 0 False False [] False ) (fst mData) (snd mData) fnt
+        world = World av [land] [f1] [b1,b2] [newLady] [smallLady,fish] canvas [int,bl,curs] [] screen (Change [] 0 0 False False [] [] False ) (fst mData) (snd mData) fnt dics
         
 
     playMus world
     setMusicVolume 24
     loop world
     closeAudio
-    SDLT.quit
 
     where loop w = do
             
@@ -174,14 +183,16 @@ main = SDL.withInit [SDL.InitEverything] $ do
              event      <- SDL.pollEvent
              case event of
                   SDL.Quit -> return (True,w)
-                  (SDL.KeyDown (SDL.Keysym SDL.SDLK_SPACE _ _)) -> whileEvents (applyToEntity w "sushi" (\e -> e {audioList = ext [Just ("bubble",True,0,2)]}))
+                  (SDL.KeyDown (SDL.Keysym SDL.SDLK_ESCAPE _ _)) -> return (True,w)
+                  (SDL.KeyDown (SDL.Keysym SDL.SDLK_LCTRL _ _)) -> whileEvents (applyToEntity w "sushi" (\e -> e {audioList = ext [Just ("bubble",True,0,2)]}))
                   (SDL.KeyDown (SDL.Keysym SDL.SDLK_LEFT _ _)) -> whileEvents w
                   (SDL.KeyDown (SDL.Keysym SDL.SDLK_RIGHT _ _)) -> whileEvents w
+                  (SDL.KeyDown (SDL.Keysym SDL.SDLK_RETURN _ _)) -> let out = toChatBot w (reverse.usrStr.changes $ w) in whileEvents $ processOutput out (w{changes = (changes w){usrStr = []}})
                   (SDL.MouseButtonDown x y _) -> whileEvents $ updateMouse (x,y) w 
                   
 
                   SDL.NoEvent -> return (False,w)
-                  _           -> whileEvents w
+                  _       -> whileEvents $ keyToString w event
 
 ---------------------------------------------------------------------------------------------------
 {-Data Initialisation-}
@@ -241,28 +252,46 @@ renderEntity src dest = do SDL.blitSurface (surface src) (head.frameList $ src) 
 renderEntities :: [Entity] -> SDL.Surface -> IO [Entity] 
 renderEntities xs dest = sequence $ map (\im -> renderEntity im dest) xs
 
+renderNamedEntity :: String -> [Entity] -> SDL.Surface -> IO [Entity]
+renderNamedEntity _ [] _ = return []
+renderNamedEntity s (e:es) out | (name e) == s = (renderEntity e out) >>= (\newE -> return (newE:es))
+                               | otherwise = (renderNamedEntity s es out) >>= (\tl -> return (e:tl))
+
+renderMenu :: World -> IO World
+renderMenu w = do let ls = linesToSur [((0,canvasHeight),(screenWidth-1 ,canvasHeight)),
+                                          ((0,screenHeight-1),(screenWidth-1,screenHeight-1)),
+                                          ((0,canvasHeight),(0,screenHeight-1)),
+                                          ((screenWidth-1,canvasHeight),(screenWidth - 1,screenHeight-1)),
+                                          ((terminalWidth, canvasHeight),(terminalWidth,screenHeight)),
+                                          ((0,screenHeight - 30),(terminalWidth,screenHeight - 30)),
+                                          ((terminalWidth,canvasHeight+30),(screenWidth,canvasHeight+30))] (screen w) (getPixel 0 0 255)
+
+                  let inter = (fromJust $ find (\e -> name e == "interface") (menu w))
+                      black = (fromJust $ find (\e -> name e == "black") (menu w))
+                      cursor = (fromJust $ find (\e -> name e == "cursor") (menu w))
+                      m0 = inter:black:[fixCursor w cursor (lineFormat - 20)]
+                  
+                  m1 <- renderNamedEntity "black" (m0) (surface inter)
+                  textToSur "Inventory:" (font w) (terminalWidth + 5) 10 1 20 (surface inter)
+                  textToSur (reverse.usrStr.changes $ w) (font w) 5 (terminalHeight - 25) 1 (lineFormat - 20) (surface inter)  
+                  textToSur  (concat.buffer.changes $ w)(font w) 5 10 8 lineFormat (surface inter)
+                  textToSur (inventoryToString w) (font w) (terminalWidth + 5) 40 8 40 (surface inter)
+                  m2 <- renderNamedEntity "cursor" m1 (surface inter)
+                  newInt <- renderEntity inter (screen w)
+
+                  sequence ls
+                  return w {menu = m2}
+
 
 renderWorld :: World -> IO World
-renderWorld wo = let w = fixRelPos.fixCamera $ wo in 
-                 do  l         <- renderEntities (land w) (surface $ canvas w)
+renderWorld wo = do  w         <- renderMenu.fixRelPos.fixCamera $ wo 
+                     l         <- renderEntities (land w) (surface $ canvas w)
                      newBg     <- renderEntities (bg w) (surface $ canvas w)
                      newMiscBg <- renderEntities (miscBg w) (surface $ canvas w)
                      av        <- renderEntity (avatar w) (surface $ canvas w)
                      newMiscFg <- renderEntities (miscFg w) (surface $ canvas w)
                      newFg     <- renderEntities (fg w) (surface $ canvas w)
                      newCan    <- renderEntity (canvas w) (screen w)
-                     newMenu   <- renderEntities (menu w) (screen w)
-
-                     let ls = linesToSur [((0,canvasHeight),(screenWidth-1 ,canvasHeight)),
-                                          ((0,screenHeight-1),(screenWidth-1,screenHeight-1)),
-                                          ((0,canvasHeight),(0,screenHeight-1)),
-                                          ((screenWidth-1,canvasHeight),(screenWidth - 1,screenHeight-1)),
-                                          ((terminalWidth, canvasHeight),(terminalWidth,screenHeight))] (screen w) (getPixel 0 0 255)
-
-                     sequence ls
-                     
-                     textToSur "While the ever-shifting, untrustworthy presentation adds to the general creepiness of the horror-trope skeleton, the entire narrative is so under-explained and flatly acted that none of it feels memorable. Moreover, the game never makes you connect to the people barely surviving its story. It's not that Evil Within needs to aim to be another Last of Us. But more time spent on crafting the characters would have given the game-makers another way to make players uneasy. Sebastian's personality is so blase it doesn't feel like he - or, more importantly, the player - has anything at stake. There's no charm or idiosyncrasy to these heroes or villains. They exist to be embittered or endangered and that's it. This lack of connection makes The Evil Within feel more like the work of an old master who hasn't quite absorbed the changes that his medium has gone through." (font w) (surface.head.menu $ w)
-
 
                      return w { avatar  = av,
                                         land    = l,
@@ -270,8 +299,7 @@ renderWorld wo = let w = fixRelPos.fixCamera $ wo in
                                         bg      = newBg,
                                         miscFg  = newMiscFg,
                                         miscBg  = newMiscBg,
-                                        canvas  = newCan,
-                                        menu    = newMenu
+                                        canvas  = newCan
                                        }
 
 
@@ -320,7 +348,8 @@ nextEntity e = e { frameList = tail $ frameList e,
 {- avatar movment-}
 
 goTo :: (Int,Int) -> World -> World
-goTo (x,y) w = let origin = (pixToMap w).avatarCenter $ w
+goTo (x,y) w = if (x > canvasWidth) || (y > canvasHeight) then w else
+               let origin = (pixToMap w).avatarCenter $ w
                    dest = pixToMap w (x,y)
                    newDest = if elem dest (mapData w) 
                              then dest
@@ -334,6 +363,13 @@ goTo (x,y) w = let origin = (pixToMap w).avatarCenter $ w
                    audLi = ext  ((take (length path - 10) $ cycle [Just ("step",True,(0),25)])++[Just ("step",False,(0),25),Nothing])
 
                in w {avatar = (avatar w){ posList = makePosRect.ext $ path, frameList = fl, audioList = audLi}}
+
+goToward :: World -> String -> World
+goToward w s =
+ case getEntity ((miscBg w)++(miscFg w)) s of
+                       Nothing -> w
+                       Just e  -> goTo (entityCenter e) w
+
 
 avatarCenter :: World -> (Int,Int)
 avatarCenter w = let (_,(apx,apy)) = getCurrent $ avatar w
@@ -447,22 +483,30 @@ applySurface :: Int -> Int -> SDL.Surface -> SDL.Surface -> IO Bool
 applySurface x y src dst = SDL.blitSurface src clip dst offset
  where offset = Just SDL.Rect { SDL.rectX = x, SDL.rectY = y, SDL.rectW = 0, SDL.rectH = 0 }
        clip = Just SDL.Rect { SDL.rectX = 0, SDL.rectY = 0, SDL.rectW = fst $ surfaceSize src, SDL.rectH = snd $ surfaceSize src }
+
 ---------------------------------------------------------------------------------------------------
 {- Terminal Interface -}
 
 getTextSurface :: String -> SDLT.Font -> IO SDL.Surface
-getTextSurface s f = SDLT.renderTextSolid f s (SDL.Color 255 255 255)
+getTextSurface s f = SDLT.renderTextSolid f s (SDL.Color 191 191 191)
 
-textToSur :: String -> SDLT.Font -> SDL.Surface -> IO Bool
-textToSur text f out = let ts = concat $ (format lineFormat) (lines text)
-                           sl = map (flip getTextSurface $ f) (drop (length ts - 7) ts)
-                       in do ls <- sequence sl
-                             foldl' (\a (s,(x,y)) -> do b1 <- a
-                                                        b2 <- applySurface x y s out
-                                                        return (b1 && b2)) (return True) (zip ls [(5,y) | y <- [5,25..]])
+textToSur :: String -> SDLT.Font -> Int -> Int-> Int -> Int -> SDL.Surface -> IO Bool
+textToSur text f x y nl nc out =
+  let ts = concat $ (format nc) (lines text)
+      sl = map (flip getTextSurface $ f) (drop (length ts - nl) ts)
+  in do ls <- sequence sl
+        foldl' (\a (s,(x,y)) -> do b1 <- a
+                                   b2 <- applySurface x y s out
+                                   return (b1 && b2)) (return True) (zip ls [(x,y) | y <- [y,y+20..]])
 
-    
+toChatBot :: World -> String -> BotOutput
+toChatBot w s = parseInput s (botData w)
 
+processOutput :: BotOutput -> World -> World
+processOutput (Go s) w = 
+  case getEntity (miscObj w) s of Nothing -> addToBuffer w ("System\\> Sorry, can't find "++s)
+                                  Just e -> goTo (entityCenter e) (addToBuffer w ("System\\> Going toward: " ++ s))
+processOutput o w = addToBuffer w ("ChatBot\\> "++ show o)
 
 ---------------------------------------------------------------------------------------------------
 {- Sound -}
@@ -603,7 +647,9 @@ linkEntities main child = child {posList = posList main, frameList = frameList m
 
 computeSpeed :: Entity -> Int
 computeSpeed i = case posList $ i of (Just a: Just b:rs) -> SDL.rectX b - SDL.rectX a
-                                     _ -> 0
+
+getEntity :: [Entity] -> String -> Maybe Entity
+getEntity xs s = find (\e -> name e == s) xs
 
 applyToEntity :: World -> String -> (Entity -> Entity) -> World
 applyToEntity w tag f | tag == "avatar" = w {avatar = f (avatar w)}
@@ -638,6 +684,62 @@ surfaceSize s = (SDL.surfaceGetWidth s, SDL.surfaceGetHeight s)
 
 static = (ext [0],ext [0])
 pos (x,y) = (ext [x],ext [y])
+
+miscObj w = (miscBg w) ++ (miscFg w)
+
+inventoryToString :: World -> String
+inventoryToString w = concatMap (\e -> name e ++ " ") (inventory w)
+
+fixCursor :: World -> Entity -> Int -> Entity
+fixCursor w c nc = let len = length (usrStr.changes $ w)
+                       ((_,_),(_,apy)) = getCurrent c
+                       newPosList = makePosRect.ext $ [((if len >= nc then 8*(mod len nc) else (5+len * 8)),apy)]
+                   in c {posList = newPosList}
+
+
+addToBuffer w s = w {changes = (changes w){buffer = (buffer.changes $ w)++[s++"\n"]}}
+
+keyToString :: World -> SDL.Event -> World
+keyToString w e = 
+  let str = (usrStr.changes $ w)
+      addC c w = w {changes = (changes w){usrStr = c:str}} in
+
+      case e of (SDL.KeyDown (SDL.Keysym SDL.SDLK_a _ _ )) -> addC 'a' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_b _ _ )) -> addC 'b' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_c _ _ )) -> addC 'c' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_d _ _ )) -> addC 'd' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_e _ _ )) -> addC 'e' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_f _ _ )) -> addC 'f' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_g _ _ )) -> addC 'g' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_h _ _ )) -> addC 'h' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_i _ _ )) -> addC 'i' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_j _ _ )) -> addC 'j' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_k _ _ )) -> addC 'k' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_l _ _ )) -> addC 'l' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_m _ _ )) -> addC 'm' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_n _ _ )) -> addC 'n' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_o _ _ )) -> addC 'o' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_p _ _ )) -> addC 'p' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_q _ _ )) -> addC 'q' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_r _ _ )) -> addC 'r' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_s _ _ )) -> addC 's' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_t _ _ )) -> addC 't' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_u _ _ )) -> addC 'u' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_v _ _ )) -> addC 'v' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_w _ _ )) -> addC 'w' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_x _ _ )) -> addC 'x' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_y _ _ )) -> addC 'y' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_z _ _ )) -> addC 'z' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_QUOTE _ _ )) -> addC '\'' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_EXCLAIM _ _ )) -> addC '!' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_SPACE _ _ )) -> addC ' ' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_COMMA _ _ )) -> addC '?' w
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_DELETE _ _ )) -> w {changes = (changes w){usrStr = []}}
+                (SDL.KeyDown (SDL.Keysym SDL.SDLK_BACKSPACE _ _ )) -> w {changes = (changes w){usrStr = if str == [] then str else tail str}}
+                _ -> w
+
+
+
 --------------------------------------------------------------------------------------------------------
 {- misc helper functions-}
 
